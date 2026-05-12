@@ -113,6 +113,12 @@ func formatCRC32C(crc32c uint32) string {
 
 func timeFromRequest(r *http.Request) (time.Time, error) {
 	dateStr := r.Header.Get("Date")
+	// Real GCS doesn't require clients to send a Date header on
+	// uploadObjectPart, so fall back to the current time when one isn't
+	// provided.
+	if dateStr == "" {
+		return time.Now().UTC(), nil
+	}
 	date, err := time.Parse(time.RFC1123, dateStr)
 	if err != nil {
 		return time.Time{}, err
