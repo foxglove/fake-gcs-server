@@ -315,8 +315,14 @@ func validateCompletePartSizeAndNum(partSize int64, partNumber int, isLastPart b
 	return nil
 }
 
+// validateCompleteMultipartUploadRequest only LOADS the upload state; the
+// caller (`completeMultipartUpload`) is responsible for deleting it after
+// the final object has been successfully assembled and persisted. Using
+// `LoadAndDelete` here makes the upload state irrecoverable on transient
+// failures (e.g. backend errors) and turns idempotent retries into spurious
+// `NoSuchUpload` errors.
 func validateCompleteMultipartUploadRequest(s *Server, uploadID string, bucketName string, objectName string, r *http.Request) (*multipartUpload, *completeMultipartUploadRequest, *xmlResponse) {
-	val, ok := s.mpus.LoadAndDelete(uploadID)
+	val, ok := s.mpus.Load(uploadID)
 	if !ok {
 		return nil, nil, &xmlResponse{
 			status:       http.StatusNotFound,
@@ -540,6 +546,11 @@ func (s *Server) completeMultipartUpload(r *http.Request) xmlResponse {
 			errorMessage: fmt.Sprintf("failed to create final object: %s", err),
 		}
 	}
+
+	// Only release the upload state once the final object has been written
+	// successfully. See `validateCompleteMultipartUploadRequest` for the
+	// rationale.
+	s.mpus.Delete(uploadID)
 
 	// Create the response
 	result := completeMultipartUploadResult{
