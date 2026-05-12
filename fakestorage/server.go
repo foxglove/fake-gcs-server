@@ -471,8 +471,32 @@ func (s *Server) healthcheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// publicHostMatcher matches incoming requests against the currently specified server publicHost.
+// publicHostMatcher matches incoming requests against the currently
+// specified server publicHost.
+//
+// In addition to the upstream behavior, accepts any inbound request
+// whose port matches the configured publicHost's port. The upstream
+// fake-gcs-server requires the `Host` header to equal `-public-host`
+// exactly, which makes it impossible for the same server to be reached
+// via multiple hostnames -- e.g. `localhost:4500` from a host process
+// and `gcs:4500` from sibling containers on a docker bridge network.
+// Relaxing the match to port equality lets all clients use whatever
+// hostname their network resolves, as long as everyone agrees on the
+// port.
 func (s *Server) publicHostMatcher(r *http.Request, rm *mux.RouteMatch) bool {
+	publicPort := ""
+	if i := strings.IndexByte(s.publicHost, ':'); i >= 0 {
+		publicPort = s.publicHost[i+1:]
+	}
+	if publicPort != "" {
+		reqPort := ""
+		if i := strings.IndexByte(r.Host, ':'); i >= 0 {
+			reqPort = r.Host[i+1:]
+		}
+		if reqPort == publicPort {
+			return true
+		}
+	}
 	if strings.Contains(s.publicHost, ":") || !strings.Contains(r.Host, ":") {
 		return r.Host == s.publicHost
 	}
