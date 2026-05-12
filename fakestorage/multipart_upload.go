@@ -495,7 +495,9 @@ func (s *Server) assembleFinalObject(mpu *multipartUpload, partNumbers []int) (*
 			Etag:         finalETag,
 			Created:      now,
 			Updated:      now,
-			Generation:   1,
+			// The fs backend rejects objects with Generation > 0 ("not
+			// implemented: fs storage type does not support generations
+			// yet"). The backend assigns its own generation on insert.
 			Metadata:     mpu.Metadata,
 		},
 		Content: finalContent.Bytes(),
