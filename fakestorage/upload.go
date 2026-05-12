@@ -137,6 +137,20 @@ func (s *Server) insertObject(r *http.Request) jsonResponse {
 	if _, err := s.backend.GetBucket(bucketName); err != nil {
 		return jsonResponse{status: http.StatusNotFound}
 	}
+
+	// XML API server-side copy. Clients may use this in place of the
+	// JSON API's `rewriteTo`/`copyTo` to perform server-side object
+	// copies:
+	//   PUT /<dst-bucket>/<dst-object>
+	//   Content-Length: 0
+	//   x-goog-copy-source: <src-bucket>/<src-object>
+	// See https://cloud.google.com/storage/docs/xml-api/put-object-copy
+	if r.Method == http.MethodPut {
+		if copySource := r.Header.Get("x-goog-copy-source"); copySource != "" {
+			return s.xmlCopyObject(bucketName, copySource, r)
+		}
+	}
+
 	uploadType := r.URL.Query().Get("uploadType")
 	if uploadType == "" && r.Header.Get("X-Goog-Upload-Protocol") == uploadTypeResumable {
 		uploadType = uploadTypeResumable
@@ -861,4 +875,61 @@ func generateUploadID() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", raw[:]), nil
+}
+
+// xmlCopyObject implements the GCS XML API server-side copy
+// (PUT with x-goog-copy-source header). The destination bucket/object
+// come from the request URL; the source bucket+object are in the
+// `x-goog-copy-source` header.
+//
+// Real GCS accepts the source value either as `<bucket>/<object>` or
+// `/<bucket>/<object>`, and clients are free to percent-encode the
+// path. Some clients percent-encode more aggressively than the URL
+// spec strictly requires (escaping unreserved characters like `-`, `_`,
+// `.`), so we url-decode both the bucket and object halves before
+// looking them up in the backend.
+func (s *Server) xmlCopyObject(dstBucket, copySource string, r *http.Request) jsonResponse {
+	copySource = strings.TrimPrefix(copySource, "/")
+	sep := strings.IndexByte(copySource, '/')
+	if sep <= 0 {
+		return jsonResponse{status: http.StatusBadRequest, errorMessage: "invalid x-goog-copy-source"}
+	}
+	srcBucket := copySource[:sep]
+	srcObject := copySource[sep+1:]
+	if decoded, err := url.PathUnescape(srcBucket); err == nil {
+		srcBucket = decoded
+	}
+	if decoded, err := url.PathUnescape(srcObject); err == nil {
+		srcObject = decoded
+	}
+
+	dstObject := unescapeMuxVars(mux.Vars(r))["objectName"]
+
+	srcStream, err := s.backend.GetObject(srcBucket, srcObject)
+	if err != nil {
+		return jsonResponse{status: http.StatusNotFound, errorMessage: "source object not found"}
+	}
+	defer srcStream.Close()
+
+	newObj := StreamingObject{
+		ObjectAttrs: ObjectAttrs{
+			BucketName:         dstBucket,
+			Name:               dstObject,
+			ACL:                srcStream.ACL,
+			ContentType:        srcStream.ContentType,
+			ContentEncoding:    srcStream.ContentEncoding,
+			ContentDisposition: srcStream.ContentDisposition,
+			ContentLanguage:    srcStream.ContentLanguage,
+			Metadata:           srcStream.Metadata,
+		},
+		Content: srcStream.Content,
+	}
+
+	created, err := s.createObject(newObj, backend.NoConditions{})
+	if err != nil {
+		return errToJsonResponse(err)
+	}
+	defer created.Close()
+
+	return jsonResponse{data: newObjectResponse(created.ObjectAttrs, s.externalURL)}
 }
