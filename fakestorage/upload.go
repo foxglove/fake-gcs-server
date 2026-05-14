@@ -524,7 +524,15 @@ func (s *Server) signedUpload(bucketName string, r *http.Request) jsonResponse {
 		return errToJsonResponse(err)
 	}
 	obj.Close()
-	return jsonResponse{data: newObjectResponse(obj.ObjectAttrs, urlhelper.GetBaseURL(r))}
+	// Real GCS returns the ETag header on XML API uploads (signed URLs and
+	// plain `PUT /<bucket>/<object>` alike). Some clients fail loudly when
+	// it is missing -- they parse it as the canonical post-upload identity
+	// for optimistic concurrency. Match real GCS by quoting the md5 hash
+	// per RFC 7232.
+	return jsonResponse{
+		data:   newObjectResponse(obj.ObjectAttrs, urlhelper.GetBaseURL(r)),
+		header: http.Header{"ETag": []string{fmt.Sprintf(`"%s"`, obj.Etag)}},
+	}
 }
 
 func getObjectACL(predefinedACL string) []storage.ACLRule {
