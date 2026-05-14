@@ -173,6 +173,18 @@ func (s *Server) insertObject(r *http.Request) jsonResponse {
 				return s.signedUpload(bucketName, r)
 			}
 		}
+		// XML API simple PUT: `PUT /<bucket>/<object>` with the body as
+		// the object's content (no `?uploadType=`, no `X-Goog-Algorithm`,
+		// no `x-goog-copy-source`). signedUpload already implements this
+		// shape correctly (object name from the URL path, body to backend)
+		// -- the X-Goog-Algorithm gate above is what distinguishes a
+		// "signed URL" call from a plain XML PUT.
+		// See https://cloud.google.com/storage/docs/xml-api/put-object-upload
+		if r.Method == http.MethodPut {
+			if _, ok := unescapeMuxVars(mux.Vars(r))["objectName"]; ok {
+				return s.signedUpload(bucketName, r)
+			}
+		}
 		return jsonResponse{errorMessage: "invalid uploadType", status: http.StatusBadRequest}
 	}
 }
