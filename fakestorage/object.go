@@ -705,11 +705,11 @@ func (s *Server) xmlListObjects(r *http.Request) xmlResponse {
 	}
 
 	// GCS supports both the V1 (marker) and V2 (list-type=2, continuation-token,
-	// start-after) pagination styles. Unlike PageToken (which the JSON API
-	// treats as an inclusive start-at cursor), marker/continuation-token/
-	// start-after are exclusive: listing resumes strictly after that key. A
-	// trailing NUL sorts before any real key that extends the cursor, so it
-	// turns the exclusive boundary into the inclusive one ListOptions expects.
+	// start-after) pagination styles. Unlike the JSON API's pageToken -- an
+	// opaque cursor with no documented comparison rule -- these are specified
+	// as literal object keys: "objects whose names are lexicographically
+	// greater than the marker are returned" (exclusive of the given key).
+	// https://cloud.google.com/storage/docs/xml-api/get-bucket-list
 	isV2 := r.URL.Query().Get("list-type") == "2"
 	marker := r.URL.Query().Get("marker")
 	pageToken := marker
@@ -720,6 +720,8 @@ func (s *Server) xmlListObjects(r *http.Request) xmlResponse {
 		}
 	}
 	if pageToken != "" {
+		// ListOptions' cursor match is inclusive; append "\x00" (sorts before
+		// any key extending pageToken) to enforce the exclusive XML contract.
 		pageToken += "\x00"
 	}
 
