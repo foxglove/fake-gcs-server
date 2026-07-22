@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -1135,6 +1136,118 @@ func TestXMLClientListObjects(t *testing.T) {
 				}
 			})
 		}
+	})
+}
+
+func TestXMLListObjectsPagination(t *testing.T) {
+	runServersTest(t, runServersOptions{objs: getObjectsForListTests()}, func(t *testing.T, server *Server) {
+		client := &http.Client{Transport: server.transport}
+		fetch := func(t *testing.T, rawQuery string) ListBucketResult {
+			t.Helper()
+			resp, err := client.Get("https://storage.googleapis.com/some-bucket/?" + rawQuery)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("unexpected status %d for query %q", resp.StatusCode, rawQuery)
+			}
+			var result ListBucketResult
+			if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+				t.Fatal(err)
+			}
+			return result
+		}
+		keysOf := func(result ListBucketResult) []string {
+			keys := make([]string, len(result.Contents))
+			for i, c := range result.Contents {
+				keys[i] = c.Key
+			}
+			return keys
+		}
+
+		t.Run("v1 marker pagination walks the whole listing", func(t *testing.T) {
+			var allKeys []string
+			marker := ""
+			for page := 0; page < 10; page++ {
+				result := fetch(t, "max-keys=2&marker="+url.QueryEscape(marker))
+				allKeys = append(allKeys, keysOf(result)...)
+				if !result.IsTruncated {
+					break
+				}
+				if result.NextMarker == "" {
+					t.Fatal("IsTruncated is true but NextMarker is empty")
+				}
+				marker = result.NextMarker
+			}
+			expected := []string{
+				"img/brand.jpg",
+				"img/hi-res/party-01.jpg",
+				"img/hi-res/party-02.jpg",
+				"img/hi-res/party-03.jpg",
+				"img/low-res/party-01.jpg",
+				"img/low-res/party-02.jpg",
+				"img/low-res/party-03.jpg",
+				"video/hi-res/some_video_1080p.mp4",
+			}
+			if !reflect.DeepEqual(allKeys, expected) {
+				t.Errorf("wrong keys returned across pages\nwant %#v\ngot  %#v", expected, allKeys)
+			}
+		})
+
+		t.Run("v2 continuation-token pagination walks the whole listing", func(t *testing.T) {
+			var allKeys []string
+			token := ""
+			for page := 0; page < 10; page++ {
+				result := fetch(t, "list-type=2&max-keys=2&continuation-token="+url.QueryEscape(token))
+				allKeys = append(allKeys, keysOf(result)...)
+				if !result.IsTruncated {
+					break
+				}
+				if result.NextContinuationToken == "" {
+					t.Fatal("IsTruncated is true but NextContinuationToken is empty")
+				}
+				token = result.NextContinuationToken
+			}
+			expected := []string{
+				"img/brand.jpg",
+				"img/hi-res/party-01.jpg",
+				"img/hi-res/party-02.jpg",
+				"img/hi-res/party-03.jpg",
+				"img/low-res/party-01.jpg",
+				"img/low-res/party-02.jpg",
+				"img/low-res/party-03.jpg",
+				"video/hi-res/some_video_1080p.mp4",
+			}
+			if !reflect.DeepEqual(allKeys, expected) {
+				t.Errorf("wrong keys returned across pages\nwant %#v\ngot  %#v", expected, allKeys)
+			}
+		})
+
+		t.Run("last page is not truncated", func(t *testing.T) {
+			result := fetch(t, "marker=img/low-res/party-02.jpg")
+			if result.IsTruncated {
+				t.Errorf("expected IsTruncated to be false, got true (NextMarker=%q)", result.NextMarker)
+			}
+			if result.NextMarker != "" {
+				t.Errorf("expected empty NextMarker, got %q", result.NextMarker)
+			}
+			want := []string{"img/low-res/party-03.jpg", "video/hi-res/some_video_1080p.mp4"}
+			if got := keysOf(result); !reflect.DeepEqual(got, want) {
+				t.Errorf("wrong keys\nwant %#v\ngot  %#v", want, got)
+			}
+		})
+
+		t.Run("marker excludes the marker key itself", func(t *testing.T) {
+			result := fetch(t, "marker=img/low-res/party-02.jpg&max-keys=1")
+			want := []string{"img/low-res/party-03.jpg"}
+			if got := keysOf(result); !reflect.DeepEqual(got, want) {
+				t.Errorf("wrong keys\nwant %#v\ngot  %#v", want, got)
+			}
+			if !result.IsTruncated || result.NextMarker != "img/low-res/party-03.jpg" {
+				t.Errorf("expected truncation with NextMarker=img/low-res/party-03.jpg, got IsTruncated=%v NextMarker=%q", result.IsTruncated, result.NextMarker)
+			}
+		})
 	})
 }
 

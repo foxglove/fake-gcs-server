@@ -24,13 +24,18 @@ type xmlResponseBody struct {
 }
 
 type ListBucketResult struct {
-	XMLName        xml.Name       `xml:"ListBucketResult"`
-	Name           string         `xml:"Name"`
-	CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
-	Delimiter      string         `xml:"Delimiter"`
-	Prefix         string         `xml:"Prefix"`
-	KeyCount       int            `xml:"KeyCount"`
-	Contents       []Contents     `xml:"Contents"`
+	XMLName               xml.Name       `xml:"ListBucketResult"`
+	Name                  string         `xml:"Name"`
+	CommonPrefixes        []CommonPrefix `xml:"CommonPrefixes,omitempty"`
+	Delimiter             string         `xml:"Delimiter"`
+	Prefix                string         `xml:"Prefix"`
+	Marker                string         `xml:"Marker,omitempty"`
+	NextMarker            string         `xml:"NextMarker,omitempty"`
+	NextContinuationToken string         `xml:"NextContinuationToken,omitempty"`
+	MaxKeys               int            `xml:"MaxKeys,omitempty"`
+	IsTruncated           bool           `xml:"IsTruncated"`
+	KeyCount              int            `xml:"KeyCount"`
+	Contents              []Contents     `xml:"Contents"`
 }
 
 type Contents struct {

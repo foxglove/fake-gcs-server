@@ -692,10 +692,43 @@ func (s *Server) listObjects(r *http.Request) jsonResponse {
 func (s *Server) xmlListObjects(r *http.Request) xmlResponse {
 	bucketName := unescapeMuxVars(mux.Vars(r))["bucketName"]
 
+	var maxKeys int
+	if maxKeysStr := r.URL.Query().Get("max-keys"); maxKeysStr != "" {
+		parsed, err := strconv.Atoi(maxKeysStr)
+		if err != nil || parsed < 0 {
+			return xmlResponse{
+				status:       http.StatusBadRequest,
+				errorMessage: "invalid max-keys",
+			}
+		}
+		maxKeys = parsed
+	}
+
+	// GCS supports both the V1 (marker) and V2 (list-type=2, continuation-token,
+	// start-after) pagination styles. Unlike PageToken (which the JSON API
+	// treats as an inclusive start-at cursor), marker/continuation-token/
+	// start-after are exclusive: listing resumes strictly after that key. A
+	// trailing NUL sorts before any real key that extends the cursor, so it
+	// turns the exclusive boundary into the inclusive one ListOptions expects.
+	isV2 := r.URL.Query().Get("list-type") == "2"
+	marker := r.URL.Query().Get("marker")
+	pageToken := marker
+	if isV2 {
+		pageToken = r.URL.Query().Get("continuation-token")
+		if pageToken == "" {
+			pageToken = r.URL.Query().Get("start-after")
+		}
+	}
+	if pageToken != "" {
+		pageToken += "\x00"
+	}
+
 	opts := ListOptions{
-		Prefix:    r.URL.Query().Get("prefix"),
-		Delimiter: r.URL.Query().Get("delimiter"),
-		Versions:  r.URL.Query().Get("versions") == "true",
+		Prefix:     r.URL.Query().Get("prefix"),
+		Delimiter:  r.URL.Query().Get("delimiter"),
+		Versions:   r.URL.Query().Get("versions") == "true",
+		PageToken:  pageToken,
+		MaxResults: maxKeys,
 	}
 
 	response, err := s.ListObjectsWithOptionsPaginated(bucketName, opts)
@@ -706,11 +739,28 @@ func (s *Server) xmlListObjects(r *http.Request) xmlResponse {
 		}
 	}
 
+	// response.NextPageToken is an inclusive start-of-next-page cursor, but
+	// marker/continuation-token are exclusive of the value returned. Since
+	// the marker is re-parsed with the "\x00" trick above, the value we hand
+	// back needs to be the last key actually returned on this page.
+	nextCursor := ""
+	if response.NextPageToken != "" && len(response.Objects) > 0 {
+		nextCursor = response.Objects[len(response.Objects)-1].Name
+	}
+
 	result := ListBucketResult{
-		Name:      bucketName,
-		Delimiter: opts.Delimiter,
-		Prefix:    opts.Prefix,
-		KeyCount:  len(response.Objects),
+		Name:        bucketName,
+		Delimiter:   opts.Delimiter,
+		Prefix:      opts.Prefix,
+		MaxKeys:     maxKeys,
+		IsTruncated: response.NextPageToken != "",
+		KeyCount:    len(response.Objects),
+	}
+	if isV2 {
+		result.NextContinuationToken = nextCursor
+	} else {
+		result.Marker = marker
+		result.NextMarker = nextCursor
 	}
 
 	if opts.Delimiter != "" {
